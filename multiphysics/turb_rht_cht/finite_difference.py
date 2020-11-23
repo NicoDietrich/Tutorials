@@ -4,12 +4,13 @@ import subprocess
 import re
 import shutil
 import logging
-import numpy as np
+import math
 
 
 logging.basicConfig(level=logging.DEBUG)
 
 LOGGER = logging.getLogger(__name__)
+MPI_n = 2
 
 def compile_ffd(config):
     LOGGER.info(f"Compile FFD box using {config}")
@@ -18,12 +19,12 @@ def compile_ffd(config):
 
 def solve_state(config):
     LOGGER.info("Solve State Equation")
-    subprocess.run(['mpirun', '-n', '2', 'SU2_CFD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
 
 
 def solve_adj_state(config):
     LOGGER.info("Solve Adjoint Equation")
-    subprocess.run(['mpirun', '-n', '2', 'SU2_CFD_AD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
 
 
 def project_sensitivities(config):
@@ -185,6 +186,8 @@ def gradient_descent():
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
 
+    deformation = [0 for i in range(24)]
+
     for i in range(opt_steps):
         LOGGER.info(f"========== {i} ==========")
         if i == 1:
@@ -200,8 +203,9 @@ def gradient_descent():
         store_important_files(index=i)
 
         sensitivities = read_sensitivities(grad_file)
-        sensitivities = np.array(sensitivities)
-        deformation = scale/np.linalg.norm(sensitivities)*sensitivities
+        norm = math.sqrt(sum([s**2 for s in sensitivities]))
+
+        deformation = [scale/norm*s for s in sensitivities]
         get_ffd_deformation(deformation, deformed_ffd_box)
         compile_ffd(deformed_ffd_box)
 
