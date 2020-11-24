@@ -9,8 +9,12 @@ import math
 
 
 DATA_DIR = './data/'
-logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.DEBUG)
+if not os.path.isdir(DATA_DIR):
+    os.makedirs(DATA_DIR)
+
+logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.INFO)
 LOGGER = logging.getLogger(__name__)
+
 MPI_n = 2
 
 def compile_ffd(config):
@@ -166,8 +170,6 @@ def central_difference_verification():
 
 
 def store_important_files(index):
-    if not os.path.isdir(DATA_DIR):
-        os.makedirs(DATA_DIR)
     shutil.copy('./volume_flow_rht_0.vtu', DATA_DIR + f'volume_flow_{index}.vtu')
     shutil.copy('./volume_solid_cht_1.vtu', DATA_DIR + f'./opt_iterations/volume_solid_{index}.vtu')
     shutil.copy('of_grad.dat', DATA_DIR + f'of_grad_{index}.csv')
