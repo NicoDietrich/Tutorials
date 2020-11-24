@@ -1,6 +1,4 @@
-*.vtu
-*.dat
 deform_ffd.cfg
-*.su2
-*.csv
 tags
+run_job
+data/*
