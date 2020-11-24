@@ -1,3 +1,4 @@
+import time
 import os
 import csv
 import subprocess
@@ -24,6 +25,7 @@ def compile_ffd(config):
 
 def solve_state(config):
     LOGGER.info("Solve State Equation")
+    tic = time.perf_counter()
     try:
         with open('output_primal.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
@@ -32,12 +34,17 @@ def solve_state(config):
         LOGGER.warn("Could not solve State Equation, see output_primal.txt")
         raise CalledProcessError
         return
+    toc = time.perf_counter()
+    time_seconds = toc - tic
+    time_minutes = time_seconds/60.
+    LOGGER.info(f"Done in {time_seconds} seconds or {time_minutes:.2f} minutes")
     os.remove('output_primal.txt')
     return
 
 
 def solve_adj_state(config):
     LOGGER.info("Solve Adjoint Equation")
+    tic = time.perf_counter()
     try:
         with open('output_adjoint.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'],
@@ -45,6 +52,10 @@ def solve_adj_state(config):
     except CalledProcessError:
         LOGGER.warn("Could not solve Adjoint Equation, see output_adjoint.txt")
         raise CalledProcessError
+    toc = time.perf_counter()
+    time_seconds = toc - tic
+    time_minutes = time_seconds/60.
+    LOGGER.info(f"Done in {time_seconds} seconds or {time_minutes:.2f} minutes")
     os.remove('output_adjoint.txt')
     return
 
