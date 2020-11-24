@@ -7,8 +7,9 @@ import logging
 import math
 
 
-logging.basicConfig(filename='fd.log', level=logging.DEBUG)
 
+DATA_DIR = './data/'
+logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.DEBUG)
 LOGGER = logging.getLogger(__name__)
 MPI_n = 2
 
@@ -19,12 +20,29 @@ def compile_ffd(config):
 
 def solve_state(config):
     LOGGER.info("Solve State Equation")
-    subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
+    try:
+        with open('output_primal.txt', 'w') as outfile:
+            subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
+                    check=True, stdout=outfile, stderr=outfile)
+    except CalledProcessError:
+        LOGGER.warn("Could not solve State Equation, see output_primal.txt")
+        raise CalledProcessError
+        return
+    os.remove('output_primal.txt')
+    return
 
 
 def solve_adj_state(config):
     LOGGER.info("Solve Adjoint Equation")
-    subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
+    try:
+        with open('output_adjoint.txt', 'w') as outfile:
+            subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'],
+                    check=True, stdout=outfile, stderr=outfile)
+    except CalledProcessError:
+        LOGGER.warn("Could not solve Adjoint Equation, see output_adjoint.txt")
+        raise CalledProcessError
+    os.remove('output_adjoint.txt')
+    return
 
 
 def project_sensitivities(config):
@@ -84,6 +102,7 @@ def read_sensitivities(dat_file):
 
 
 def central_difference_verification():
+    LOGGER.info("\n ========= Start Central Difference Approx =========\n")
     state_cfg = 'turbulent_rht_cht.cfg'
     flow_cfg = 'config_flow_rht.cfg'
     solid_cfg = 'config_solid_cht.cfg'
@@ -96,17 +115,17 @@ def central_difference_verification():
     orig_ffd_box = 'config_ffd.cfg'
     deformed_ffd_box = 'deform_ffd.cfg'
 
-    results_file = 'results_test.csv'
+    results_file = DATA_DIR + 'results_central_dif.csv'
 
-    h = 1e-6
-    if not os.path.isfile('of_grad.dat'):
-        change_mesh(flow_cfg, orig_flow_mesh)
-        compile_ffd(orig_ffd_box)
-        solve_state(state_cfg)
-        rename_state_files()
-        solve_adj_state(adj_cfg)
-        rename_adj_files()
-        project_sensitivities(adj_cfg)
+
+    LOGGER.info("Calculate Adjoint sensitivities")
+    change_mesh(flow_cfg, orig_flow_mesh)
+    compile_ffd(orig_ffd_box)
+    solve_state(state_cfg)
+    rename_state_files()
+    solve_adj_state(adj_cfg)
+    rename_adj_files()
+    project_sensitivities(adj_cfg)
 
     adj_sensitivities = read_sensitivities('of_grad.dat')
     change_mesh(flow_cfg, deformed_flow_mesh)
@@ -117,41 +136,45 @@ def central_difference_verification():
         writer = csv.DictWriter(f, fieldnames)
         writer.writeheader()
 
-    for i, adj_grad in enumerate(adj_sensitivities[:2]):
-        deformation = 24*[0]
-        deformation[i] = h
-        get_ffd_deformation(deformation, deformed_ffd_box)
-        compile_ffd(deformed_ffd_box)
-        solve_state(state_cfg)
-        F_xph = extract_value(state_sol_file, 11)
+    h = 1e-6
+    for h in [1e-4, 1e-5,]:  # 1e-6, 1e-7]:
+        LOGGER.info(f"Start verification for h={h}")
+        for i, adj_grad in enumerate(adj_sensitivities[:2]):
+            LOGGER.info(f"Point {i}")
+            deformation = 24*[0]
+            deformation[i] = h
+            get_ffd_deformation(deformation, deformed_ffd_box)
+            compile_ffd(deformed_ffd_box)
+            solve_state(state_cfg)
+            F_xph = extract_value(state_sol_file, 11)
 
-        deformation[i] = -h
-        get_ffd_deformation(deformation, deformed_ffd_box)
-        compile_ffd(deformed_ffd_box)
-        solve_state(state_cfg)
-        F_xmh = extract_value(state_sol_file, 11)
+            deformation[i] = -h
+            get_ffd_deformation(deformation, deformed_ffd_box)
+            compile_ffd(deformed_ffd_box)
+            solve_state(state_cfg)
+            F_xmh = extract_value(state_sol_file, 11)
 
-        central_difference = (F_xph - F_xmh)/(2*h)
+            central_difference = (F_xph - F_xmh)/(2*h)
 
-        data = {'index': i, 'h': h, 'F_xph': F_xph,
-            'F_xmh': F_xmh, 'central_dif': central_difference,
-            'adj_grad': adj_grad}
+            data = {'index': i, 'h': h, 'F_xph': F_xph,
+                'F_xmh': F_xmh, 'central_dif': central_difference,
+                'adj_grad': adj_grad}
 
-        with open(results_file, 'a', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames)
-            writer.writerow(data)
+            with open(results_file, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames)
+                writer.writerow(data)
 
 
 def store_important_files(index):
-    if not os.path.isdir('opt_iterations'):
-        os.makedirs('opt_iterations')
-    shutil.copy('./volume_flow_rht_0.vtu', f'./opt_iterations/volume_flow_{index}.vtu')
-    shutil.copy('./volume_solid_cht_1.vtu', f'./opt_iterations/volume_solid_{index}.vtu')
-    shutil.copy('of_grad.dat', f'opt_iterations/of_grad_{index}.csv')
-    shutil.copy('surface_sens_0.vtu', f'opt_iterations/surface_sens_line_{index}.vtu')
-    shutil.copy('surface_sens_1.vtu', f'opt_iterations/surface_sens_nothing_{index}.vtu')
-    shutil.copy('volume_sens_0.vtu', f'opt_iterations/surface_sens_flow_{index}.vtu')
-    shutil.copy('volume_sens_1.vtu', f'opt_iterations/surface_sens_solid_{index}.vtu')
+    if not os.path.isdir(DATA_DIR):
+        os.makedirs(DATA_DIR)
+    shutil.copy('./volume_flow_rht_0.vtu', DATA_DIR + f'volume_flow_{index}.vtu')
+    shutil.copy('./volume_solid_cht_1.vtu', DATA_DIR + f'./opt_iterations/volume_solid_{index}.vtu')
+    shutil.copy('of_grad.dat', DATA_DIR + f'of_grad_{index}.csv')
+    shutil.copy('surface_sens_0.vtu', DATA_DIR + f'surface_sens_line_{index}.vtu')
+    shutil.copy('surface_sens_1.vtu', DATA_DIR + f'surface_sens_nothing_{index}.vtu')
+    shutil.copy('volume_sens_0.vtu', DATA_DIR + f'surface_sens_flow_{index}.vtu')
+    shutil.copy('volume_sens_1.vtu', DATA_DIR + f'surface_sens_solid_{index}.vtu')
     # shutil.copy('ffd_boxes_0.vtk', f'opt_iterations/ffd_boxes_upper_{index}.vtk')
     # shutil.copy('ffd_boxes_1.vtk', f'opt_iterations/ffd_boxes_lower_{index}.vtk')
 
@@ -159,6 +182,11 @@ def store_important_files(index):
 def store_functional_value(index, value, functional_file):
     with open(functional_file, 'a') as f:
         f.write(f"{index}, {value}\n")
+
+
+def armijo_rule(prev_deformation, sensitivities):
+    return
+
 
 def gradient_descent():
 
@@ -177,7 +205,7 @@ def gradient_descent():
     grad_file= 'of_grad.dat'
     scale = 5./100
 
-    functional_data_file = 'functional_evolution.csv'
+    functional_data_file = DATA_DIR + 'functional_evolution.csv'
     if os.path.isfile(functional_data_file):
         os.remove(functional_data_file)
     with open(functional_data_file, 'w') as f:
@@ -221,6 +249,6 @@ def gradient_descent():
 
 
 if __name__ == '__main__':
-    # central_difference_verification()
-    gradient_descent()
+    central_difference_verification()
+    # gradient_descent()
 
