@@ -7,7 +7,7 @@ import logging
 import math
 
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(filename='fd.log', level=logging.DEBUG)
 
 LOGGER = logging.getLogger(__name__)
 MPI_n = 2
@@ -117,7 +117,7 @@ def central_difference_verification():
         writer = csv.DictWriter(f, fieldnames)
         writer.writeheader()
 
-    for i, adj_grad in enumerate(adj_sensitivities[:1]):
+    for i, adj_grad in enumerate(adj_sensitivities[:2]):
         deformation = 24*[0]
         deformation[i] = h
         get_ffd_deformation(deformation, deformed_ffd_box)
@@ -152,8 +152,8 @@ def store_important_files(index):
     shutil.copy('surface_sens_1.vtu', f'opt_iterations/surface_sens_nothing_{index}.vtu')
     shutil.copy('volume_sens_0.vtu', f'opt_iterations/surface_sens_flow_{index}.vtu')
     shutil.copy('volume_sens_1.vtu', f'opt_iterations/surface_sens_solid_{index}.vtu')
-    shutil.copy('ffd_boxes_0.vtk', f'opt_iterations/ffd_boxes_upper_{index}.vtk')
-    shutil.copy('ffd_boxes_1.vtk', f'opt_iterations/ffd_boxes_lower_{index}.vtk')
+    # shutil.copy('ffd_boxes_0.vtk', f'opt_iterations/ffd_boxes_upper_{index}.vtk')
+    # shutil.copy('ffd_boxes_1.vtk', f'opt_iterations/ffd_boxes_lower_{index}.vtk')
 
 
 def store_functional_value(index, value, functional_file):
@@ -161,6 +161,8 @@ def store_functional_value(index, value, functional_file):
         f.write(f"{index}, {value}\n")
 
 def gradient_descent():
+
+    LOGGER.info("\n ========= starting gradient descent ========= \n")
     state_cfg = 'turbulent_rht_cht.cfg'
     flow_cfg = 'config_flow_rht.cfg'
     solid_cfg = 'config_solid_cht.cfg'
@@ -181,12 +183,12 @@ def gradient_descent():
     with open(functional_data_file, 'w') as f:
         f.write("i, fvalue\n")
 
-    opt_steps = 5
+    opt_steps = 3
 
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
 
-    deformation = [0 for i in range(24)]
+    prev_deformation = [0 for i in range(24)]
 
     for i in range(opt_steps):
         LOGGER.info(f"========== {i} ==========")
@@ -202,18 +204,20 @@ def gradient_descent():
 
         store_important_files(index=i)
 
-        sensitivities = read_sensitivities(grad_file)
+        ref_sensitivities = read_sensitivities(grad_file)
+        sensitivities = [s - d for d,s in zip(prev_deformation, ref_sensitivities)]
         norm = math.sqrt(sum([s**2 for s in sensitivities]))
+        LOGGER.info(f"L2 norm sensitivities: {norm}")
 
-        deformation = [scale/norm*s for s in sensitivities]
+        deformation = [d + scale/norm*s for d,s in zip(prev_deformation, sensitivities)]
         get_ffd_deformation(deformation, deformed_ffd_box)
         compile_ffd(deformed_ffd_box)
 
-        # deformation[0] = 0
-        # deformation[12] = 0
-        # deformation = [0.0, 0.05, 0.1, 0.14, 0.16, 0.17, 0.175, 0.17, 0.16,
-        #         0.14, 0.1, 0.05, 0.0, -0.05, -0.1, -0.14, -0.16, -0.17, -0.175,
-        #         -0.17, -0.16, -0.14, -0.1, -0.05]
+        prev_deformation = deformation
+
+    solve_state(state_cfg)
+    J_i = extract_value(state_sol_file, 11)
+    store_functional_value(opt_steps, J_final, functional_data_file)
 
 
 if __name__ == '__main__':
