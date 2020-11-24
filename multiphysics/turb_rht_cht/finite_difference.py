@@ -8,15 +8,34 @@ import logging
 import math
 
 
+class SolveEquationError(RuntimeError):
+    def __init__(self, *args):
+        self.args = args
+
 
 DATA_DIR = './data/'
 if not os.path.isdir(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.INFO)
+logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.DEBUG)
 LOGGER = logging.getLogger(__name__)
 
 MPI_n = 2
+
+deformed_ffd_box = 'deform_ffd.cfg'
+state_cfg = 'turbulent_rht_cht.cfg'
+
+state_cfg = 'turbulent_rht_cht.cfg'
+flow_cfg = 'config_flow_rht.cfg'
+solid_cfg = 'config_solid_cht.cfg'
+
+adj_cfg = 'turbulent_rht_cht_adjoint.cfg'
+state_sol_file = 'turbulent_rht_cht.csv'
+orig_flow_mesh = 'mesh_flow_ffd.su2'
+deformed_flow_mesh = 'mesh_flow_ffd_deform.su2'
+
+orig_ffd_box = 'config_ffd.cfg'
+grad_file= 'of_grad.dat'
 
 def compile_ffd(config):
     LOGGER.info(f"Compile FFD box using {config}")
@@ -30,10 +49,10 @@ def solve_state(config):
         with open('output_primal.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
                     check=True, stdout=outfile, stderr=outfile)
-    except CalledProcessError:
+    except subprocess.CalledProcessError:
         LOGGER.warn("Could not solve State Equation, see output_primal.txt")
-        raise CalledProcessError
-        return
+        raise SolveEquationError
+
     toc = time.perf_counter()
     time_seconds = toc - tic
     time_minutes = time_seconds/60.
@@ -49,9 +68,10 @@ def solve_adj_state(config):
         with open('output_adjoint.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'],
                     check=True, stdout=outfile, stderr=outfile)
-    except CalledProcessError:
+    except subprocess.CalledProcessError:
         LOGGER.warn("Could not solve Adjoint Equation, see output_adjoint.txt")
-        raise CalledProcessError
+        raise SolveEquationError
+
     toc = time.perf_counter()
     time_seconds = toc - tic
     time_minutes = time_seconds/60.
@@ -182,7 +202,7 @@ def central_difference_verification():
 
 def store_important_files(index):
     shutil.copy('./volume_flow_rht_0.vtu', DATA_DIR + f'volume_flow_{index}.vtu')
-    shutil.copy('./volume_solid_cht_1.vtu', DATA_DIR + f'./opt_iterations/volume_solid_{index}.vtu')
+    shutil.copy('./volume_solid_cht_1.vtu', DATA_DIR + f'volume_solid_{index}.vtu')
     shutil.copy('of_grad.dat', DATA_DIR + f'of_grad_{index}.csv')
     shutil.copy('surface_sens_0.vtu', DATA_DIR + f'surface_sens_line_{index}.vtu')
     shutil.copy('surface_sens_1.vtu', DATA_DIR + f'surface_sens_nothing_{index}.vtu')
@@ -197,26 +217,58 @@ def store_functional_value(index, value, functional_file):
         f.write(f"{index}, {value}\n")
 
 
-def armijo_rule(prev_deformation, sensitivities):
-    return
+def armijo(prev_deformation, sensitivities, max_iterations, J_i):
+    norm = math.sqrt(sum([s**2 for s in sensitivities]))
+    initial_stepsize = 1./norm*1./2**4
+    stepsize = 2*initial_stepsize
+    gamma = 1e-4
+    armijo_successful = False
+    failed_because_mesh_quality = False
+    J_ip1 = None
+    for j in range(max_iterations):
+        stepsize *= 1./2
+
+        deformation = [defo + stepsize*sens for defo,sens in zip(prev_deformation, sensitivities)]
+        get_ffd_deformation(deformation, deformed_ffd_box)
+        compile_ffd(deformed_ffd_box)
+
+        try:
+            solve_state(state_cfg)
+        except SolveEquationError:
+            number = j+1
+            LOGGER.warn(f"Could not solve State eq in Amijo, {number}/{max_iterations} failed")
+            continue
+
+        J_ip1 = extract_value(state_sol_file, 11)
+
+        directional_derivative = 1
+        tol = gamma*directional_derivative*stepsize
+
+        dif = J_ip1 - J_i
+        LOGGER.debug(f'new fvalue - old fvalue = {dif:.4f} < {tol:.4f} = tol?')
+
+        if dif < tol:
+            LOGGER.debug("Armijo finished after {} steps".format(j+1))  # wg Start bei 0
+            LOGGER.debug("Check Adjoint")
+
+            rename_state_files()
+            try:
+                solve_adj_state(adj_cfg)
+            except SolveEquationError:
+                LOGGER.warn("Armijo step accepted but adjoint not solvable, return to amijo")
+            else:
+                armijo_successful = True
+                break
+        else:
+            number = j+1
+            LOGGER.debug(f"Try again :(, {number}/{max_iterations} failed")
+
+    return armijo_successful, J_ip1, deformation
 
 
 def gradient_descent():
 
     LOGGER.info("\n ========= starting gradient descent ========= \n")
-    state_cfg = 'turbulent_rht_cht.cfg'
-    flow_cfg = 'config_flow_rht.cfg'
-    solid_cfg = 'config_solid_cht.cfg'
-
-    adj_cfg = 'turbulent_rht_cht_adjoint.cfg'
-    state_sol_file = 'turbulent_rht_cht.csv'
-    orig_flow_mesh = 'mesh_flow_ffd.su2'
-    deformed_flow_mesh = 'mesh_flow_ffd_deform.su2'
-
-    orig_ffd_box = 'config_ffd.cfg'
-    deformed_ffd_box = 'deform_ffd.cfg'
-    grad_file= 'of_grad.dat'
-    scale = 5./100
 
     functional_data_file = DATA_DIR + 'functional_evolution.csv'
     if os.path.isfile(functional_data_file):
@@ -225,24 +277,36 @@ def gradient_descent():
         f.write("i, fvalue\n")
 
     opt_steps = 3
+    max_armijo_it = 5
 
-    change_mesh(flow_cfg, orig_flow_mesh)
-    compile_ffd(orig_ffd_box)
+    # change_mesh(flow_cfg, orig_flow_mesh)
+    # compile_ffd(orig_ffd_box)
+    # solve_state(state_cfg)
+    # J_0 = extract_value(state_sol_file, 11)
+    # J_0 = extract_value(state_sol_file, 11)
+    # store_functional_value(0, J_0, functional_data_file)
+    # rename_state_files()
+    # solve_adj_state(adj_cfg)
+    # rename_adj_files()
+    # project_sensitivities(adj_cfg)
+    J_0 = 113
 
     prev_deformation = [0 for i in range(24)]
 
-    for i in range(opt_steps):
-        LOGGER.info(f"========== {i} ==========")
-        if i == 1:
-            change_mesh(flow_cfg, deformed_flow_mesh)
-        solve_state(state_cfg)
-        J_i = extract_value(state_sol_file, 11)
-        store_functional_value(i, J_i, functional_data_file)
-        rename_state_files()
-        solve_adj_state(adj_cfg)
-        rename_adj_files()
-        project_sensitivities(adj_cfg)
+    ref_sensitivities = read_sensitivities(grad_file)
+    sensitivities = [s - d for d,s in zip(prev_deformation, ref_sensitivities)]
+    norm = math.sqrt(sum([s**2 for s in sensitivities]))
+    LOGGER.info(f"L2 norm sensitivities: {norm}")
 
+    change_mesh(flow_cfg, deformed_flow_mesh)
+    J_i = J_0
+    for i in range(1, opt_steps):
+
+        success, J_i, prev_deformation = armijo(prev_deformation, sensitivities, max_armijo_it, J_i)
+        if not success:
+            LOGGER.error("Amijo failed, exit")
+            return
+        store_functional_value(i, J_i, functional_data_file)
         store_important_files(index=i)
 
         ref_sensitivities = read_sensitivities(grad_file)
@@ -250,18 +314,7 @@ def gradient_descent():
         norm = math.sqrt(sum([s**2 for s in sensitivities]))
         LOGGER.info(f"L2 norm sensitivities: {norm}")
 
-        deformation = [d + scale/norm*s for d,s in zip(prev_deformation, sensitivities)]
-        get_ffd_deformation(deformation, deformed_ffd_box)
-        compile_ffd(deformed_ffd_box)
-
-        prev_deformation = deformation
-
-    solve_state(state_cfg)
-    J_i = extract_value(state_sol_file, 11)
-    store_functional_value(opt_steps, J_final, functional_data_file)
-
-
 if __name__ == '__main__':
-    central_difference_verification()
-    # gradient_descent()
+    # central_difference_verification()
+    gradient_descent()
 
