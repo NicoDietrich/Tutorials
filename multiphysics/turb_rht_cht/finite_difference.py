@@ -68,6 +68,7 @@ def solve_state(config):
 
 
 def solve_adj_state(config):
+    rename_state_files()
     LOGGER.info("Solve Adjoint Equation")
     tic = time.perf_counter()
     try:
@@ -87,6 +88,7 @@ def solve_adj_state(config):
 
 
 def project_sensitivities(config):
+    rename_adj_files()
     LOGGER.info("Project Sensitivities")
     subprocess.run(['SU2_DOT_AD', f'{config}'], check=True, stdout=subprocess.DEVNULL)
 
@@ -210,13 +212,13 @@ def store_functional_value(index, value, functional_file):
 
 
 def armijo(prev_deformation, sensitivities, max_iterations, J_i):
-    norm = math.sqrt(sum([s**2 for s in sensitivities]))
-    initial_stepsize = 1./norm*1./2**4
-    stepsize = 2*initial_stepsize
-    gamma = 1e-4
     armijo_successful = False
-    failed_because_mesh_quality = False
     J_ip1 = None
+    gamma = 1e-4
+    initial_stepsize = 1./norm*1./2**4
+
+    norm = math.sqrt(sum([s**2 for s in sensitivities]))
+    stepsize = 2*initial_stepsize
     for j in range(max_iterations):
         stepsize *= 1./2
 
@@ -226,28 +228,23 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
 
         try:
             solve_state(state_cfg)
+            J_ip1 = extract_value(state_sol_file, 11)
         except SolveEquationError:
             number = j+1
             LOGGER.warn(f"Could not solve State eq in Amijo, {number}/{max_iterations} failed")
             continue
-
-        J_ip1 = extract_value(state_sol_file, 11)
 
         # in finite dimensions the gradient g is the transposed derivative, d=g^T.
         # Assuming the sensitivites are the gradient, then the directional
         # derivative is g^T*g and therefore:
         directional_derivative = norm**2
 
+        dif = J_i - J_ip1
+        LOGGER.debug(f'old fvalue - new fvalue = {dif:.4f} < {tol:.4f} = tol?')
         tol = gamma*directional_derivative*stepsize
-
-        dif = J_ip1 - J_i
-        LOGGER.debug(f'new fvalue - old fvalue = {dif:.4f} < {tol:.4f} = tol?')
-
         if dif < tol:
             LOGGER.debug("Armijo finished after {} steps".format(j+1))  # wg Start bei 0
             LOGGER.debug("Check Adjoint")
-
-            rename_state_files()
             try:
                 solve_adj_state(adj_cfg)
             except SolveEquationError:
@@ -277,12 +274,12 @@ def gradient_descent():
 
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
+
     solve_state(state_cfg)
     J_0 = extract_value(state_sol_file, 11)
     store_functional_value(0, J_0, functional_data_file)
-    rename_state_files()
+
     solve_adj_state(adj_cfg)
-    rename_adj_files()
     project_sensitivities(adj_cfg)
 
     prev_deformation = [0 for i in range(24)]
