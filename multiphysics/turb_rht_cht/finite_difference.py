@@ -6,11 +6,13 @@ import re
 import shutil
 import logging
 import math
+import argparse
 
 
 class SolveEquationError(RuntimeError):
     def __init__(self, *args):
         self.args = args
+
 
 
 DATA_DIR = './data/'
@@ -20,20 +22,24 @@ if not os.path.isdir(DATA_DIR):
 logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.DEBUG)
 LOGGER = logging.getLogger(__name__)
 
-MPI_n = 2
+parser = argparse.ArgumentParser()
+parser.add_argument('-n', dest='n', type=int, default=2,
+        help='Argument that is passed as mpirun -n, default is 2')
+args = parser.parse_args()
 
+
+MPI_n = args.n
+
+# Files are Gloabl
 deformed_ffd_box = 'deform_ffd.cfg'
 state_cfg = 'turbulent_rht_cht.cfg'
-
 state_cfg = 'turbulent_rht_cht.cfg'
 flow_cfg = 'config_flow_rht.cfg'
 solid_cfg = 'config_solid_cht.cfg'
-
 adj_cfg = 'turbulent_rht_cht_adjoint.cfg'
 state_sol_file = 'turbulent_rht_cht.csv'
 orig_flow_mesh = 'mesh_flow_ffd.su2'
 deformed_flow_mesh = 'mesh_flow_ffd_deform.su2'
-
 orig_ffd_box = 'config_ffd.cfg'
 grad_file= 'of_grad.dat'
 
@@ -138,20 +144,8 @@ def read_sensitivities(dat_file):
 
 def central_difference_verification():
     LOGGER.info("\n ========= Start Central Difference Approx =========\n")
-    state_cfg = 'turbulent_rht_cht.cfg'
-    flow_cfg = 'config_flow_rht.cfg'
-    solid_cfg = 'config_solid_cht.cfg'
-
-    adj_cfg = 'turbulent_rht_cht_adjoint.cfg'
-    state_sol_file = 'turbulent_rht_cht.csv'
-    orig_flow_mesh = 'mesh_flow_ffd.su2'
-    deformed_flow_mesh = 'mesh_flow_ffd_deform.su2'
-
-    orig_ffd_box = 'config_ffd.cfg'
-    deformed_ffd_box = 'deform_ffd.cfg'
 
     results_file = DATA_DIR + 'results_central_dif.csv'
-
 
     LOGGER.info("Calculate Adjoint sensitivities")
     change_mesh(flow_cfg, orig_flow_mesh)
@@ -284,7 +278,6 @@ def gradient_descent():
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
     solve_state(state_cfg)
-    J_0 = extract_value(state_sol_file, 11)
     J_0 = extract_value(state_sol_file, 11)
     store_functional_value(0, J_0, functional_data_file)
     rename_state_files()
