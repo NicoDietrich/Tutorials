@@ -14,7 +14,6 @@ class SolveEquationError(RuntimeError):
         self.args = args
 
 
-
 DATA_DIR = './data/'
 if not os.path.isdir(DATA_DIR):
     os.makedirs(DATA_DIR)
@@ -27,8 +26,9 @@ parser.add_argument('-n', dest='n', type=int, default=2,
         help='Argument that is passed as mpirun -n, default is 2')
 args = parser.parse_args()
 
-
 MPI_n = args.n
+
+LOGGER.info(f"Use mpi_run -n {MPI_n} to solve equations")
 
 # Files are Gloabl
 deformed_ffd_box = 'deform_ffd.cfg'
@@ -215,9 +215,9 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     armijo_successful = False
     J_ip1 = None
     gamma = 1e-4
-    initial_stepsize = 1./norm*1./2**4
 
     norm = math.sqrt(sum([s**2 for s in sensitivities]))
+    initial_stepsize = 1./norm*1./2**4
     stepsize = 2*initial_stepsize
     for j in range(max_iterations):
         stepsize *= 1./2
