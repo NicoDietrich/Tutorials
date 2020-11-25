@@ -208,8 +208,6 @@ def store_important_files(index):
     shutil.copy('surface_sens_1.vtu', DATA_DIR + f'surface_sens_nothing_{index}.vtu')
     shutil.copy('volume_sens_0.vtu', DATA_DIR + f'surface_sens_flow_{index}.vtu')
     shutil.copy('volume_sens_1.vtu', DATA_DIR + f'surface_sens_solid_{index}.vtu')
-    # shutil.copy('ffd_boxes_0.vtk', f'opt_iterations/ffd_boxes_upper_{index}.vtk')
-    # shutil.copy('ffd_boxes_1.vtk', f'opt_iterations/ffd_boxes_lower_{index}.vtk')
 
 
 def store_functional_value(index, value, functional_file):
@@ -241,7 +239,11 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
 
         J_ip1 = extract_value(state_sol_file, 11)
 
-        directional_derivative = 1
+        # in finite dimensions the gradient g is the transposed derivative, d=g^T.
+        # Assuming the sensitivites are the gradient, then the directional
+        # derivative is g^T*g and therefore:
+        directional_derivative = norm**2
+
         tol = gamma*directional_derivative*stepsize
 
         dif = J_ip1 - J_i
@@ -279,17 +281,16 @@ def gradient_descent():
     opt_steps = 3
     max_armijo_it = 5
 
-    # change_mesh(flow_cfg, orig_flow_mesh)
-    # compile_ffd(orig_ffd_box)
-    # solve_state(state_cfg)
-    # J_0 = extract_value(state_sol_file, 11)
-    # J_0 = extract_value(state_sol_file, 11)
-    # store_functional_value(0, J_0, functional_data_file)
-    # rename_state_files()
-    # solve_adj_state(adj_cfg)
-    # rename_adj_files()
-    # project_sensitivities(adj_cfg)
-    J_0 = 113
+    change_mesh(flow_cfg, orig_flow_mesh)
+    compile_ffd(orig_ffd_box)
+    solve_state(state_cfg)
+    J_0 = extract_value(state_sol_file, 11)
+    J_0 = extract_value(state_sol_file, 11)
+    store_functional_value(0, J_0, functional_data_file)
+    rename_state_files()
+    solve_adj_state(adj_cfg)
+    rename_adj_files()
+    project_sensitivities(adj_cfg)
 
     prev_deformation = [0 for i in range(24)]
 
