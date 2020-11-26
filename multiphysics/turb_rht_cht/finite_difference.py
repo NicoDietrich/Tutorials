@@ -242,6 +242,9 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     # in finite dimensions the gradient g is the transposed derivative, d=g^T.
     # Assuming the sensitivites are the gradient, then the directional
     # derivative is g^T*g and therefore:
+    LOGGER.debug("Starting Armijo Rule")
+    LOGGER.debug(f"prev_deformation: {prev_deformation}")
+    LOGGER.debug(f"sensitivities: {sensitivities}")
     directional_derivative = sum([s**2 for s in sensitivities])
     l2_norm = math.sqrt(directional_derivative)
     LOGGER.info(f"l2 norm perturbed sensitivities: {l2_norm}")
@@ -262,7 +265,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
         except SolveEquationError:
             LOGGER.warn(f"Could not solve State eq in Amijo")
             now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
-            shutil.move("outfile.txt", FAIL_DIR + now_str + "_state" + ".txt")
+            shutil.move("output.txt", FAIL_DIR + now_str + "_state" + ".txt")
             continue
         J_ip1 = extract_value(state_sol_file, 11)
 
@@ -279,7 +282,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
             except SolveEquationError:
                 LOGGER.warn("Armijo step accepted but adjoint not solvable, return to amijo")
                 now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
-                shutil.move("outfile.txt", FAIL_DIR + now_str + "_adjoint" + ".txt")
+                shutil.move("output.txt", FAIL_DIR + now_str + "_adjoint" + ".txt")
             else:
                 return J_ip1, deformation
     raise ArmijoError
@@ -295,8 +298,8 @@ def gradient_descent():
     with open(functional_data_file, 'w') as f:
         f.write("i, fvalue\n")
 
-    opt_steps = 3
-    max_armijo_it = 5
+    opt_steps = 8
+    max_armijo_it = 7
 
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
