@@ -1,3 +1,4 @@
+import datetime
 import time
 import os
 import csv
@@ -23,7 +24,17 @@ DATA_DIR = './data/'
 if not os.path.isdir(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-logging.basicConfig(filename=DATA_DIR + 'fd.log', level=logging.DEBUG)
+FAIL_DIR = DATA_DIR + 'fail/'
+if not os.path.isdir(FAIL_DIR):
+    os.makedirs(FAIL_DIR)
+
+logging.basicConfig(
+        filename=DATA_DIR + 'fd.log',
+        level=logging.DEBUG,
+        format='%(asctime)s %(levelname)s:%(message)s',
+        datefmt='%Y.%m.%d_%H:%M:%S'
+)
+
 LOGGER = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
@@ -33,6 +44,8 @@ args = parser.parse_args()
 
 MPI_n = args.n
 
+LOGGER.info("")
+LOGGER.info("")
 LOGGER.info(f"Use mpi_run -n {MPI_n} to solve equations")
 
 # Files are Gloabl
@@ -58,18 +71,21 @@ def solve_state(config):
     LOGGER.info("Solve State Equation")
     tic = time.perf_counter()
     try:
-        with open('output_primal.txt', 'w') as outfile:
+        with open('output.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
                     check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
-        LOGGER.warn("Could not solve State Equation, see output_primal.txt")
+        toc = time.perf_counter()
+        time_seconds = toc - tic
+        time_minutes = time_seconds/60.
+        LOGGER.warn(f"Could not solve State Equation after {time_minutes:.2f} minutes")
         raise SolveEquationError
 
     toc = time.perf_counter()
     time_seconds = toc - tic
     time_minutes = time_seconds/60.
-    LOGGER.info(f"Done in {time_seconds} seconds or {time_minutes:.2f} minutes")
-    os.remove('output_primal.txt')
+    LOGGER.info(f"Done in {time_minutes:.2f} minutes")
+    os.remove('output.txt')
     return
 
 
@@ -78,18 +94,21 @@ def solve_adj_state(config):
     LOGGER.info("Solve Adjoint Equation")
     tic = time.perf_counter()
     try:
-        with open('output_adjoint.txt', 'w') as outfile:
+        with open('output.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'],
                     check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
-        LOGGER.warn("Could not solve Adjoint Equation, see output_adjoint.txt")
+        toc = time.perf_counter()
+        time_seconds = toc - tic
+        time_minutes = time_seconds/60.
+        LOGGER.warn(f"Could not solve Adjoint Equation after {time_minutes:.2f} minutes")
         raise SolveEquationError
 
     toc = time.perf_counter()
     time_seconds = toc - tic
     time_minutes = time_seconds/60.
-    LOGGER.info(f"Done in {time_seconds} seconds or {time_minutes:.2f} minutes")
-    os.remove('output_adjoint.txt')
+    LOGGER.info(f"Done in {time_minutes:.2f} minutes")
+    os.remove('output.txt')
     return
 
 
@@ -224,10 +243,10 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     # Assuming the sensitivites are the gradient, then the directional
     # derivative is g^T*g and therefore:
     directional_derivative = sum([s**2 for s in sensitivities])
-    norm = math.sqrt(directional_derivative)
+    l2_norm = math.sqrt(directional_derivative)
     LOGGER.info(f"l2 norm perturbed sensitivities: {l2_norm}")
 
-    initial_stepsize = 1./norm*1./2**4
+    initial_stepsize = 1./l2_norm*1./2**4
     stepsize = 2*initial_stepsize
 
     for j in range(max_iterations):
@@ -241,8 +260,9 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
         try:
             solve_state(state_cfg)
         except SolveEquationError:
-            number = j+1
             LOGGER.warn(f"Could not solve State eq in Amijo")
+            now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
+            shutil.move("outfile.txt", FAIL_DIR + now_str + "_state" + ".txt")
             continue
         J_ip1 = extract_value(state_sol_file, 11)
 
@@ -258,6 +278,8 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
                 solve_adj_state(adj_cfg)
             except SolveEquationError:
                 LOGGER.warn("Armijo step accepted but adjoint not solvable, return to amijo")
+                now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
+                shutil.move("outfile.txt", FAIL_DIR + now_str + "_adjoint" + ".txt")
             else:
                 return J_ip1, deformation
     raise ArmijoError
@@ -265,7 +287,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
 
 def gradient_descent():
 
-    LOGGER.info("\n ========= starting gradient descent ========= \n")
+    LOGGER.info("========= starting gradient descent =========")
 
     functional_data_file = DATA_DIR + 'functional_evolution.csv'
     if os.path.isfile(functional_data_file):
@@ -287,11 +309,14 @@ def gradient_descent():
     prev_deformation = [0 for i in range(24)]
 
     # In the optimization loop the equations are only solved on the deformed
-    change_mesh(flow_cfg, deformed_flow_mesh)
     J_i = J_0
     for i in range(1, opt_steps):
 
+        LOGGER.info(f"===== Opt iteration {i} =====")
         project_sensitivities(adj_cfg)
+        if i == 1:
+            change_mesh(flow_cfg, deformed_flow_mesh)
+
         ref_sensitivities = read_sensitivities(grad_file)
         # Sensitivities are defined on reference geometry and "include the previous perturbations"
         # we therefore have to substract them to get the actual gradient information
@@ -308,4 +333,5 @@ def gradient_descent():
 if __name__ == '__main__':
     # central_difference_verification()
     gradient_descent()
+    LOGGER.info("Finished")
 
