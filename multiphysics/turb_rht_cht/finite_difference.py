@@ -1,3 +1,4 @@
+from multiprocessing import Pool
 import datetime
 import time
 import os
@@ -67,11 +68,11 @@ def compile_ffd(config):
     subprocess.run(['SU2_DEF', f'{config}'], check=True, stdout=subprocess.DEVNULL)
 
 
-def solve_state(config):
-    LOGGER.info("Solve State Equation")
+def solve_state(config, outfile_path='output.txt'):
+    LOGGER.info(f"Solve State Equation using {config}")
     tic = time.perf_counter()
     try:
-        with open('output.txt', 'w') as outfile:
+        with open(outfile_path, 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
                            check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
@@ -85,7 +86,7 @@ def solve_state(config):
     time_seconds = toc - tic
     time_minutes = time_seconds/60.
     LOGGER.info(f"Done in {time_minutes:.2f} minutes")
-    os.remove('output.txt')
+    os.remove(outfile_path)
     return
 
 
@@ -156,11 +157,53 @@ def change_mesh(config, meshfile):
     LOGGER.debug(f"Change Mesh in {config} to {meshfile}")
     with open(config, 'r') as f:
         lines = f.readlines()
-
     with open(config, 'w') as f:
         for line in lines:
             if re.match('^MESH_FILENAME', line):
                 f.write(f'MESH_FILENAME = {meshfile}\n')
+            else:
+                f.write(line)
+
+
+def change_config_list(state_cfg, flow_cfg, solid_cfg):
+    LOGGER.debug(f"Change List in {state_cfg} to ({flow_cfg},{solid_cfg})")
+    with open(state_cfg, 'r') as f:
+        lines = f.readlines()
+    with open(state_cfg, 'w') as f:
+        for line in lines:
+            if re.match('^CONFIG_LIST', line):
+                f.write(f'CONFIG_LIST = ({flow_cfg}, {solid_cfg})\n')
+            else:
+                f.write(line)
+
+
+def change_output_files(config, name, index):
+    LOGGER.debug(f"Change output files in {config} to {name} with index {index}")
+    with open(config, 'r') as f:
+        lines = f.readlines()
+    with open(config, 'w') as f:
+        for line in lines:
+            if re.match('^SOLUTION_FILENAME', line):
+                f.write(f'SOLUTION_FILENAME = solution_{name}_{index}\n')
+            elif re.match('^RESTART_FILENAME', line):
+                f.write(f'RESTART_FILENAME = restart_{name}_{index}\n')
+            elif re.match('^VOLUME_FILENAME', line):
+                f.write(f'VOLUME_FILENAME = volume_{name}_{index}\n')
+            elif re.match('^CONV_FILENAME', line):
+                f.write(f'CONV_FILENAME = history_{name}_{index}\n')
+            else:
+                f.write(line)
+
+
+def change_out_mesh(config, meshfile):
+    LOGGER.debug(f"Change Output Mesh in {config} to {meshfile}")
+    with open(config, 'r') as f:
+        lines = f.readlines()
+
+    with open(config, 'w') as f:
+        for line in lines:
+            if re.match('^MESH_OUT_FILENAME', line):
+                f.write(f'MESH_OUT_FILENAME = {meshfile}\n')
             else:
                 f.write(line)
 
@@ -172,6 +215,58 @@ def read_sensitivities(dat_file):
     return values
 
 
+def _central_difference(args):
+        h = args[0]
+        index = args[1]
+        LOGGER.info(f"Index {index} with h={h}")
+
+        tmp_state_cfg = str(index) + '_' + state_cfg
+        tmp_flow_cfg = str(index) + '_' + flow_cfg
+        tmp_solid_cfg = str(index) + '_' + solid_cfg
+        tmp_ffd_cfg = str(index) + '_' + deformed_ffd_config
+        tmp_sol_file = str(index) + '_' + state_sol_file
+
+        shutil.copy(state_cfg, tmp_state_cfg)
+        shutil.copy(deformed_ffd_config, tmp_ffd_cfg)
+        shutil.copy(flow_cfg, tmp_flow_cfg)
+        shutil.copy(solid_cfg, tmp_solid_cfg)
+
+        tmp_deformed_mesh = f"{index}_deformed_flow_mesh.su2"
+        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+
+        change_config_list(tmp_state_cfg, tmp_flow_cfg, tmp_solid_cfg)
+        change_mesh(tmp_flow_cfg, tmp_deformed_mesh)
+        # change_mesh(tmp_solid_cfg, tmp_deformed_mesh)
+        change_output_files(tmp_flow_cfg, 'flow_tmp', index)
+        change_output_files(tmp_solid_cfg, 'solid_tmp', index)
+
+        deformation = 24*[0]
+
+        deformation[index] = h
+        write_ffd_deformation(deformation, tmp_ffd_cfg)
+        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+
+        compile_ffd(tmp_ffd_cfg)
+        solve_state(tmp_state_cfg, outfile_path=f'output_{index}.txt')
+        F_xph = extract_value(tmp_sol_file, 11)
+
+        deformation[index] = -h
+        write_ffd_deformation(deformation, tmp_ffd_cfg)
+        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+        compile_ffd(tmp_ffd_cfg)
+        solve_state(tmp_state_cfg, outfile_path=f'output_{index}.txt')
+        F_xmh = extract_value(tmp_sol_file, 11)
+
+        os.remove(tmp_state_cfg)
+        os.remove(tmp_flow_cfg)
+        os.remove(tmp_solid_cfg)
+        os.remove(tmp_ffd_cfg)
+        os.remove(tmp_sol_file)
+        os.remove(tmp_deformed_mesh)
+
+        return (F_xmh, F_xph)
+
+
 def central_difference_verification():
     LOGGER.info("========= Start Central Difference Approx =========")
 
@@ -181,12 +276,10 @@ def central_difference_verification():
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
     solve_state(state_cfg)
-    rename_state_files()
     solve_adj_state(adj_cfg)
-    rename_adj_files()
     project_sensitivities(adj_cfg)
 
-    adj_sensitivities = read_sensitivities('of_grad.dat')
+    adj_sensitivities = read_sensitivities('of_grad.dat')[:2]
     change_mesh(flow_cfg, deformed_flow_mesh)
 
     fieldnames = ['index', 'h', 'F_xph', 'F_xmh', 'central_dif', 'adj_grad']
@@ -195,30 +288,20 @@ def central_difference_verification():
         writer = csv.DictWriter(f, fieldnames)
         writer.writeheader()
 
-    h = 1e-6
-    for h in [1e-4, 1e-5]:  # 1e-6, 1e-7]:
+    for h in [1e-5]:  # 1e-6, 1e-7]:
         LOGGER.info(f"Start verification for h={h}")
-        for i, adj_grad in enumerate(adj_sensitivities[:2]):
-            LOGGER.info(f"Point {i}")
-            deformation = 24*[0]
-            deformation[i] = h
-            write_ffd_deformation(deformation, deformed_ffd_config)
-            compile_ffd(deformed_ffd_config)
-            solve_state(state_cfg)
-            F_xph = extract_value(state_sol_file, 11)
 
-            deformation[i] = -h
-            write_ffd_deformation(deformation, deformed_ffd_config)
-            compile_ffd(deformed_ffd_config)
-            solve_state(state_cfg)
-            F_xmh = extract_value(state_sol_file, 11)
+        H = [h for s in adj_sensitivities]
+        with Pool(2) as pool:
+            res = pool.map(_central_difference, zip(H, range(len(adj_sensitivities))))
 
+        assert len(res) == len(adj_sensitivities)
+
+        for i, (F_xmh, F_xph) in enumerate(res):
             central_difference = (F_xph - F_xmh)/(2*h)
-
             data = {'index': i, 'h': h, 'F_xph': F_xph,
                     'F_xmh': F_xmh, 'central_dif': central_difference,
-                    'adj_grad': adj_grad}
-
+                    'adj_grad': adj_sensitivities[i]}
             with open(results_file, 'a', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames)
                 writer.writerow(data)
@@ -276,7 +359,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
         # and therefore dif = J_ip1 - J_i condidered
         dif = J_i - J_ip1
         tol = gamma*directional_derivative*stepsize
-        LOGGER.debug(f'old fvalue - new fvalue = {dif:.4f} < {tol:.4f} = tol?')
+        LOGGER.debug(f'old fvalue - new fvalue = {J_i} - {J_ip1} = {dif:.4f} < {tol:.4f} = tol?')
         if dif < tol:
             LOGGER.debug("Armijo finished after {} steps".format(j+1))  # wg Start bei 0
             LOGGER.debug("Check Adjoint")
@@ -301,26 +384,26 @@ def gradient_descent():
     with open(functional_data_file, 'w') as f:
         f.write("i, fvalue\n")
 
-    opt_steps = 8
+    opt_steps = 7
     max_armijo_it = 7
 
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
     solve_state(state_cfg)
-    J_0 = extract_value(state_sol_file, 11)
-    store_functional_value(0, J_0, functional_data_file)
+    J_i = extract_value(state_sol_file, 11)
 
     solve_adj_state(adj_cfg)
 
     prev_deformation = [0 for i in range(24)]
 
-    # In the optimization loop the equations are only solved on the deformed
-    J_i = J_0
     for i in range(1, opt_steps):
 
         LOGGER.info(f"===== Opt iteration {i} =====")
+        store_functional_value(i-1, J_i, functional_data_file)
         project_sensitivities(adj_cfg)
+        store_important_files(index=i-1)
         if i == 1:
+            # In the optimization loop the equations are only solved on the deformed
             change_mesh(flow_cfg, deformed_flow_mesh)
 
         ref_sensitivities = read_sensitivities(grad_file)
@@ -335,11 +418,12 @@ def gradient_descent():
         except ArmijoError:
             LOGGER.error("Amijo failed, exit")
             return
-        store_functional_value(i, J_i, functional_data_file)
-        store_important_files(index=i)
+
+    store_functional_value(opt_steps, J_i, functional_data_file)
+    store_important_files(index=opt_steps)
 
 
 if __name__ == '__main__':
-    # central_difference_verification()
-    gradient_descent()
+    central_difference_verification()
+    # gradient_descent()
     LOGGER.info("Finished")
