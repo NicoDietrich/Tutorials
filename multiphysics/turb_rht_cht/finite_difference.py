@@ -39,7 +39,7 @@ LOGGER = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-n', dest='n', type=int, default=2,
-        help='Argument that is passed as mpirun -n, default is 2')
+                    help='Argument that is passed as mpirun -n, default is 2')
 args = parser.parse_args()
 
 MPI_n = args.n
@@ -59,7 +59,7 @@ state_sol_file = 'turbulent_rht_cht.csv'
 orig_flow_mesh = 'mesh_flow_ffd.su2'
 deformed_flow_mesh = 'mesh_flow_ffd_deform.su2'
 orig_ffd_box = 'config_ffd.cfg'
-grad_file= 'of_grad.dat'
+grad_file = 'of_grad.dat'
 
 
 def compile_ffd(config):
@@ -73,7 +73,7 @@ def solve_state(config):
     try:
         with open('output.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
-                    check=True, stdout=outfile, stderr=outfile)
+                           check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
         toc = time.perf_counter()
         time_seconds = toc - tic
@@ -96,7 +96,7 @@ def solve_adj_state(config):
     try:
         with open('output.txt', 'w') as outfile:
             subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD_AD', f'{config}'],
-                    check=True, stdout=outfile, stderr=outfile)
+                           check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
         toc = time.perf_counter()
         time_seconds = toc - tic
@@ -120,7 +120,10 @@ def project_sensitivities(config):
 
 def extract_value(sol_file, index):
     tail = subprocess.Popen(['tail', '-n', '1', f'{sol_file}'], stdout=subprocess.PIPE)
-    value_string = subprocess.check_output(['awk', '-F', ',', f'{{ print ${index} }}'], stdin=tail.stdout)
+    value_string = subprocess.check_output(
+        ['awk', '-F', ',', f'{{ print ${index} }}'],
+        stdin=tail.stdout
+    )
     tail.wait()
     return float(value_string)
 
@@ -193,7 +196,7 @@ def central_difference_verification():
         writer.writeheader()
 
     h = 1e-6
-    for h in [1e-4, 1e-5,]:  # 1e-6, 1e-7]:
+    for h in [1e-4, 1e-5]:  # 1e-6, 1e-7]:
         LOGGER.info(f"Start verification for h={h}")
         for i, adj_grad in enumerate(adj_sensitivities[:2]):
             LOGGER.info(f"Point {i}")
@@ -213,8 +216,8 @@ def central_difference_verification():
             central_difference = (F_xph - F_xmh)/(2*h)
 
             data = {'index': i, 'h': h, 'F_xph': F_xph,
-                'F_xmh': F_xmh, 'central_dif': central_difference,
-                'adj_grad': adj_grad}
+                    'F_xmh': F_xmh, 'central_dif': central_difference,
+                    'adj_grad': adj_grad}
 
             with open(results_file, 'a', newline='') as f:
                 writer = csv.DictWriter(f, fieldnames)
@@ -256,14 +259,14 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
         LOGGER.info(f"== Armijo {j} ==")
         stepsize *= 1./2
 
-        deformation = [defo + stepsize*sens for defo,sens in zip(prev_deformation, sensitivities)]
+        deformation = [defo + stepsize*sens for defo, sens in zip(prev_deformation, sensitivities)]
         write_ffd_deformation(deformation, deformed_ffd_config)
         compile_ffd(deformed_ffd_config)
 
         try:
             solve_state(state_cfg)
         except SolveEquationError:
-            LOGGER.warn(f"Could not solve State eq in Amijo")
+            LOGGER.warn("Could not solve State eq in Amijo")
             now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
             shutil.move("output.txt", FAIL_DIR + now_str + "_state" + ".txt")
             continue
@@ -324,17 +327,19 @@ def gradient_descent():
         # Sensitivities are defined on reference geometry and "include the previous perturbations"
         # we therefore have to substract them to get the actual gradient information
         # at the deformed domain
-        local_sensitivities = [s - d for d,s in zip(prev_deformation, ref_sensitivities)]
+        local_sensitivities = [s - d for d, s in zip(prev_deformation, ref_sensitivities)]
         try:
-            J_i, prev_deformation = armijo(prev_deformation, local_sensitivities, max_armijo_it, J_i)
+            J_i, prev_deformation = armijo(
+                prev_deformation, local_sensitivities, max_armijo_it, J_i
+            )
         except ArmijoError:
             LOGGER.error("Amijo failed, exit")
             return
         store_functional_value(i, J_i, functional_data_file)
         store_important_files(index=i)
 
+
 if __name__ == '__main__':
     # central_difference_verification()
     gradient_descent()
     LOGGER.info("Finished")
-
