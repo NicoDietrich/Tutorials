@@ -9,6 +9,7 @@ import shutil
 import logging
 import math
 import argparse
+import glob
 
 
 class SolveEquationError(RuntimeError):
@@ -68,12 +69,12 @@ def compile_ffd(config):
     subprocess.run(['SU2_DEF', f'{config}'], check=True, stdout=subprocess.DEVNULL)
 
 
-def solve_state(config, outfile_path='output.txt'):
-    LOGGER.info(f"Solve State Equation using {config}")
+def solve_state(config, mpi_n, outfile_path='output.txt'):
+    LOGGER.info(f"Solve State Equation using {config} and mpirun -n {mpi_n}")
     tic = time.perf_counter()
     try:
         with open(outfile_path, 'w') as outfile:
-            subprocess.run(['mpirun', '-n', f'{MPI_n}', 'SU2_CFD', f'{config}'],
+            subprocess.run(['mpirun', '-n', f'{mpi_n}', 'SU2_CFD', f'{config}'],
                            check=True, stdout=outfile, stderr=outfile)
     except subprocess.CalledProcessError:
         toc = time.perf_counter()
@@ -216,55 +217,55 @@ def read_sensitivities(dat_file):
 
 
 def _central_difference(args):
-        h = args[0]
-        index = args[1]
-        LOGGER.info(f"Index {index} with h={h}")
+    h = args[0]
+    index = args[1]
+    LOGGER.info(f"Index {index} with h={h}")
 
-        tmp_state_cfg = str(index) + '_' + state_cfg
-        tmp_flow_cfg = str(index) + '_' + flow_cfg
-        tmp_solid_cfg = str(index) + '_' + solid_cfg
-        tmp_ffd_cfg = str(index) + '_' + deformed_ffd_config
-        tmp_sol_file = str(index) + '_' + state_sol_file
+    tmp_state_cfg = str(index) + '_' + state_cfg
+    tmp_flow_cfg = str(index) + '_' + flow_cfg
+    tmp_solid_cfg = str(index) + '_' + solid_cfg
+    tmp_ffd_cfg = str(index) + '_' + deformed_ffd_config
+    tmp_sol_file = str(index) + '_' + state_sol_file
 
-        shutil.copy(state_cfg, tmp_state_cfg)
-        shutil.copy(deformed_ffd_config, tmp_ffd_cfg)
-        shutil.copy(flow_cfg, tmp_flow_cfg)
-        shutil.copy(solid_cfg, tmp_solid_cfg)
+    shutil.copy(state_cfg, tmp_state_cfg)
+    shutil.copy(deformed_ffd_config, tmp_ffd_cfg)
+    shutil.copy(flow_cfg, tmp_flow_cfg)
+    shutil.copy(solid_cfg, tmp_solid_cfg)
 
-        tmp_deformed_mesh = f"{index}_deformed_flow_mesh.su2"
-        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+    tmp_deformed_mesh = f"{index}_deformed_flow_mesh.su2"
+    change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
 
-        change_config_list(tmp_state_cfg, tmp_flow_cfg, tmp_solid_cfg)
-        change_mesh(tmp_flow_cfg, tmp_deformed_mesh)
-        # change_mesh(tmp_solid_cfg, tmp_deformed_mesh)
-        change_output_files(tmp_flow_cfg, 'flow_tmp', index)
-        change_output_files(tmp_solid_cfg, 'solid_tmp', index)
+    change_config_list(tmp_state_cfg, tmp_flow_cfg, tmp_solid_cfg)
+    change_mesh(tmp_flow_cfg, tmp_deformed_mesh)
+    # change_mesh(tmp_solid_cfg, tmp_deformed_mesh)
+    change_output_files(tmp_flow_cfg, 'flow_tmp', index)
+    change_output_files(tmp_solid_cfg, 'solid_tmp', index)
 
-        deformation = 24*[0]
+    deformation = 24*[0]
 
-        deformation[index] = h
-        write_ffd_deformation(deformation, tmp_ffd_cfg)
-        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+    deformation[index] = h
+    write_ffd_deformation(deformation, tmp_ffd_cfg)
+    change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
 
-        compile_ffd(tmp_ffd_cfg)
-        solve_state(tmp_state_cfg, outfile_path=f'output_{index}.txt')
-        F_xph = extract_value(tmp_sol_file, 11)
+    compile_ffd(tmp_ffd_cfg)
+    solve_state(tmp_state_cfg, mpi_n=4, outfile_path=f'{index}_output.txt')
+    F_xph = extract_value(tmp_sol_file, 11)
 
-        deformation[index] = -h
-        write_ffd_deformation(deformation, tmp_ffd_cfg)
-        change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
-        compile_ffd(tmp_ffd_cfg)
-        solve_state(tmp_state_cfg, outfile_path=f'output_{index}.txt')
-        F_xmh = extract_value(tmp_sol_file, 11)
+    deformation[index] = -h
+    write_ffd_deformation(deformation, tmp_ffd_cfg)
+    change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
+    compile_ffd(tmp_ffd_cfg)
+    solve_state(tmp_state_cfg, mpi_n=4, outfile_path=f'{index}_output.txt')
+    F_xmh = extract_value(tmp_sol_file, 11)
 
-        os.remove(tmp_state_cfg)
-        os.remove(tmp_flow_cfg)
-        os.remove(tmp_solid_cfg)
-        os.remove(tmp_ffd_cfg)
-        os.remove(tmp_sol_file)
-        os.remove(tmp_deformed_mesh)
+    os.remove(tmp_state_cfg)
+    os.remove(tmp_flow_cfg)
+    os.remove(tmp_solid_cfg)
+    os.remove(tmp_ffd_cfg)
+    os.remove(tmp_sol_file)
+    os.remove(tmp_deformed_mesh)
 
-        return (F_xmh, F_xph)
+    return (F_xmh, F_xph)
 
 
 def central_difference_verification():
@@ -272,14 +273,14 @@ def central_difference_verification():
 
     results_file = DATA_DIR + 'results_central_dif.csv'
 
-    LOGGER.info("Calculate Adjoint sensitivities")
-    change_mesh(flow_cfg, orig_flow_mesh)
-    compile_ffd(orig_ffd_box)
-    solve_state(state_cfg)
-    solve_adj_state(adj_cfg)
-    project_sensitivities(adj_cfg)
+    # LOGGER.info("Calculate Adjoint sensitivities")
+    # change_mesh(flow_cfg, orig_flow_mesh)
+    # compile_ffd(orig_ffd_box)
+    # solve_state(state_cfg, mpi_n=4)
+    # solve_adj_state(adj_cfg)
+    # project_sensitivities(adj_cfg)
 
-    adj_sensitivities = read_sensitivities('of_grad.dat')[:2]
+    adj_sensitivities = read_sensitivities('of_grad.dat')[:8]
     change_mesh(flow_cfg, deformed_flow_mesh)
 
     fieldnames = ['index', 'h', 'F_xph', 'F_xmh', 'central_dif', 'adj_grad']
@@ -292,10 +293,10 @@ def central_difference_verification():
         LOGGER.info(f"Start verification for h={h}")
 
         H = [h for s in adj_sensitivities]
-        with Pool(2) as pool:
-            res = pool.map(_central_difference, zip(H, range(len(adj_sensitivities))))
+        res = map(_central_difference, zip(H, range(len(adj_sensitivities))))
 
-        assert len(res) == len(adj_sensitivities)
+        for f in glob.glob('*_tmp_*'):
+            os.remove(f)
 
         for i, (F_xmh, F_xph) in enumerate(res):
             central_difference = (F_xph - F_xmh)/(2*h)
@@ -335,19 +336,20 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     l2_norm = math.sqrt(directional_derivative)
     LOGGER.info(f"l2 norm perturbed sensitivities: {l2_norm}")
 
-    initial_stepsize = 1./l2_norm*1./2**4
+    initial_stepsize = 1./l2_norm*1./2**8
     stepsize = 2*initial_stepsize
 
     for j in range(max_iterations):
         LOGGER.info(f"== Armijo {j} ==")
         stepsize *= 1./2
+        LOGGER.info(f"Stepsize = {stepsize} ==")
 
         deformation = [defo + stepsize*sens for defo, sens in zip(prev_deformation, sensitivities)]
         write_ffd_deformation(deformation, deformed_ffd_config)
         compile_ffd(deformed_ffd_config)
 
         try:
-            solve_state(state_cfg)
+            solve_state(state_cfg, MPI_n)
         except SolveEquationError:
             LOGGER.warn("Could not solve State eq in Amijo")
             now_str = datetime.datetime.now().strftime("%Y.%m.%d_%H:%M:%S")
@@ -389,7 +391,7 @@ def gradient_descent():
 
     change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
-    solve_state(state_cfg)
+    solve_state(state_cfg, MPI_n)
     J_i = extract_value(state_sol_file, 11)
 
     solve_adj_state(adj_cfg)
@@ -424,6 +426,6 @@ def gradient_descent():
 
 
 if __name__ == '__main__':
-    central_difference_verification()
-    # gradient_descent()
+    # central_difference_verification()
+    gradient_descent()
     LOGGER.info("Finished")
