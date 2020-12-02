@@ -2,3 +2,6 @@ deform_ffd.cfg
 tags
 run_job
 data/*
+*.swp
+TurbRhtCht-*
+__pycache__/
