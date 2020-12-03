@@ -1,4 +1,4 @@
-from multiprocessing import Pool
+# from multiprocessing import Pool
 import datetime
 import time
 import os
@@ -51,7 +51,7 @@ LOGGER.info("")
 LOGGER.info(f"Use mpi_run -n {MPI_n} to solve equations")
 
 # Files are Gloabl
-deformed_ffd_config = 'deform_ffd.cfg'
+deformed_ffd_config = 'manual_deformed_ffd.cfg'
 state_cfg = 'turbulent_rht_cht.cfg'
 state_cfg = 'turbulent_rht_cht.cfg'
 flow_cfg = 'config_flow_rht.cfg'
@@ -142,9 +142,8 @@ def rename_adj_files():
 
 def write_ffd_deformation(values, name):
     LOGGER.info(f"Generate {name}")
-    sample_file = 'sample_ffd_deform.cfg'
     assert len(values) == 24
-    with open(sample_file, 'r') as f:
+    with open(name, 'r') as f:
         lines = f.readlines()
     with open(name, 'w') as f:
         for line in lines:
@@ -336,7 +335,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     l2_norm = math.sqrt(directional_derivative)
     LOGGER.info(f"l2 norm perturbed sensitivities: {l2_norm}")
 
-    initial_stepsize = 1./l2_norm*1./2**8
+    initial_stepsize = 1./l2_norm*1./2**0
     stepsize = 2*initial_stepsize
 
     for j in range(max_iterations):
@@ -347,6 +346,7 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
         deformation = [defo + stepsize*sens for defo, sens in zip(prev_deformation, sensitivities)]
         write_ffd_deformation(deformation, deformed_ffd_config)
         compile_ffd(deformed_ffd_config)
+        # write_ffd_deformation(deformation, flow_cfg)
 
         try:
             solve_state(state_cfg, MPI_n)
@@ -381,22 +381,25 @@ def gradient_descent():
     LOGGER.info("========= starting gradient descent =========")
 
     functional_data_file = DATA_DIR + 'functional_evolution.csv'
-    if os.path.isfile(functional_data_file):
-        os.remove(functional_data_file)
-    with open(functional_data_file, 'w') as f:
+    # if os.path.isfile(functional_data_file):
+    #     os.remove(functional_data_file)
+    with open(functional_data_file, 'a') as f:
         f.write("i, fvalue\n")
 
-    opt_steps = 7
-    max_armijo_it = 7
+    opt_steps = 8
+    max_armijo_it = 10
 
-    change_mesh(flow_cfg, orig_flow_mesh)
     compile_ffd(orig_ffd_box)
+    prev_deformation = [0 for i in range(24)]
+    write_ffd_deformation(prev_deformation, flow_cfg)
+    change_mesh(flow_cfg, orig_flow_mesh)
     solve_state(state_cfg, MPI_n)
+
+    shutil.copy('./sample_ffd_deform.cfg',  deformed_ffd_config)
+
     J_i = extract_value(state_sol_file, 11)
 
     solve_adj_state(adj_cfg)
-
-    prev_deformation = [0 for i in range(24)]
 
     for i in range(1, opt_steps):
 
