@@ -270,16 +270,16 @@ def _central_difference(args):
 def central_difference_verification():
     LOGGER.info("========= Start Central Difference Approx =========")
 
-    results_file = DATA_DIR + 'results_central_dif.csv'
+    results_file = DATA_DIR + 'gradient_test_perturbed.csv'
 
-    # LOGGER.info("Calculate Adjoint sensitivities")
-    # change_mesh(flow_cfg, orig_flow_mesh)
-    # compile_ffd(orig_ffd_box)
-    # solve_state(state_cfg, mpi_n=4)
-    # solve_adj_state(adj_cfg)
-    # project_sensitivities(adj_cfg)
+    LOGGER.info("Calculate Adjoint sensitivities")
+    change_mesh(flow_cfg, orig_flow_mesh)
+    compile_ffd(orig_ffd_box)
+    solve_state(state_cfg, mpi_n=4)
+    solve_adj_state(adj_cfg)
+    project_sensitivities(adj_cfg)
 
-    adj_sensitivities = read_sensitivities('of_grad.dat')[:8]
+    adj_sensitivities = read_sensitivities('of_grad.dat')
     change_mesh(flow_cfg, deformed_flow_mesh)
 
     fieldnames = ['index', 'h', 'F_xph', 'F_xmh', 'central_dif', 'adj_grad']
@@ -288,7 +288,7 @@ def central_difference_verification():
         writer = csv.DictWriter(f, fieldnames)
         writer.writeheader()
 
-    for h in [1e-5]:  # 1e-6, 1e-7]:
+    for h in [1e-5, 1e-6, 1e-7]:
         LOGGER.info(f"Start verification for h={h}")
 
         H = [h for s in adj_sensitivities]
@@ -390,12 +390,21 @@ def gradient_descent():
     max_armijo_it = 10
 
     compile_ffd(orig_ffd_box)
-    prev_deformation = [0 for i in range(24)]
-    write_ffd_deformation(prev_deformation, flow_cfg)
-    change_mesh(flow_cfg, orig_flow_mesh)
-    solve_state(state_cfg, MPI_n)
+    prev_deformation = [0.0, 0.05, 0.1, 0.14, 0.16, 0.17,
+                        0.175, 0.17, 0.16, 0.14, 0.1, 0.05,
+                        0.0, -0.05, -0.1, -0.14, -0.16, -0.17,
+                        -0.175, -0.17, -0.16, -0.14, -0.1, -0.05]
+
+    # prev_deformation = [0 for i in range(24)]
+    # write_ffd_deformation(prev_deformation, flow_cfg)
 
     shutil.copy('./sample_ffd_deform.cfg',  deformed_ffd_config)
+
+    write_ffd_deformation(prev_deformation, deformed_ffd_config)
+    compile_ffd(deformed_ffd_config)
+
+    change_mesh(flow_cfg, deformed_flow_mesh)
+    solve_state(state_cfg, MPI_n)
 
     J_i = extract_value(state_sol_file, 11)
 
@@ -429,6 +438,6 @@ def gradient_descent():
 
 
 if __name__ == '__main__':
-    # central_difference_verification()
-    gradient_descent()
+    central_difference_verification()
+    # gradient_descent()
     LOGGER.info("Finished")
