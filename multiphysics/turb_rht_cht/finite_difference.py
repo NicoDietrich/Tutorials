@@ -22,7 +22,7 @@ class ArmijoError(RuntimeError):
         self.args = args
 
 
-DATA_DIR = './data/'
+DATA_DIR = './optimization_accurate_adj/'
 if not os.path.isdir(DATA_DIR):
     os.makedirs(DATA_DIR)
 
@@ -218,6 +218,9 @@ def read_sensitivities(dat_file):
 def _central_difference(args):
     h = args[0]
     index = args[1]
+    deformation = args[2]
+    orig_value = deformation[index]
+
     LOGGER.info(f"Index {index} with h={h}")
 
     tmp_state_cfg = str(index) + '_' + state_cfg
@@ -240,9 +243,7 @@ def _central_difference(args):
     change_output_files(tmp_flow_cfg, 'flow_tmp', index)
     change_output_files(tmp_solid_cfg, 'solid_tmp', index)
 
-    deformation = 24*[0]
-
-    deformation[index] = h
+    deformation[index] += h
     write_ffd_deformation(deformation, tmp_ffd_cfg)
     change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
 
@@ -250,12 +251,14 @@ def _central_difference(args):
     solve_state(tmp_state_cfg, mpi_n=4, outfile_path=f'{index}_output.txt')
     F_xph = extract_value(tmp_sol_file, 11)
 
-    deformation[index] = -h
+    deformation[index] -= 2*h  # 2*h weil +h von oben korrigiert werden muss
     write_ffd_deformation(deformation, tmp_ffd_cfg)
     change_out_mesh(tmp_ffd_cfg, tmp_deformed_mesh)
     compile_ffd(tmp_ffd_cfg)
     solve_state(tmp_state_cfg, mpi_n=4, outfile_path=f'{index}_output.txt')
     F_xmh = extract_value(tmp_sol_file, 11)
+
+    deformation[index] = orig_value
 
     os.remove(tmp_state_cfg)
     os.remove(tmp_flow_cfg)
@@ -267,20 +270,30 @@ def _central_difference(args):
     return (F_xmh, F_xph)
 
 
-def central_difference_verification():
+def central_difference_verification(out_filename='central_difference.csv', deformation=None):
     LOGGER.info("========= Start Central Difference Approx =========")
 
-    results_file = DATA_DIR + 'gradient_test_perturbed.csv'
+    results_file = DATA_DIR + out_filename
+
+    compile_ffd(orig_ffd_box)
+
+    if deformation is None:
+        LOGGER.info("Calculate on initial square")
+        deformation = [0 for i in range(24)]
+        change_mesh(flow_cfg, orig_flow_mesh)
+    else:
+        LOGGER.info(f"def={deformation}")
+        write_ffd_deformation(deformation, deformed_ffd_config)
+        compile_ffd(deformed_ffd_config)
+        change_mesh(flow_cfg, deformed_flow_mesh)
 
     LOGGER.info("Calculate Adjoint sensitivities")
-    change_mesh(flow_cfg, orig_flow_mesh)
-    compile_ffd(orig_ffd_box)
     solve_state(state_cfg, mpi_n=4)
     solve_adj_state(adj_cfg)
     project_sensitivities(adj_cfg)
 
     adj_sensitivities = read_sensitivities('of_grad.dat')
-    change_mesh(flow_cfg, deformed_flow_mesh)
+    adj_gradient = [s - d for s, d in zip(adj_sensitivities, deformation)]
 
     fieldnames = ['index', 'h', 'F_xph', 'F_xmh', 'central_dif', 'adj_grad']
 
@@ -288,13 +301,15 @@ def central_difference_verification():
         writer = csv.DictWriter(f, fieldnames)
         writer.writeheader()
 
-    for h in [1e-5, 1e-6, 1e-7]:
+    D = [deformation for s in adj_gradient]
+    for h in [1e-3, 1e-4]:
         LOGGER.info(f"Start verification for h={h}")
 
-        H = [h for s in adj_sensitivities]
-        res = map(_central_difference, zip(H, range(len(adj_sensitivities))))
+        H = [h for s in adj_gradient]
+        res = map(_central_difference, zip(H, range(len(adj_gradient)), D))
 
         for f in glob.glob('*_tmp_*'):
+            LOGGER.debug(f"remove file {f}")
             os.remove(f)
 
         for i, (F_xmh, F_xph) in enumerate(res):
@@ -376,40 +391,33 @@ def armijo(prev_deformation, sensitivities, max_iterations, J_i):
     raise ArmijoError
 
 
-def gradient_descent():
+def gradient_descent(opt_steps, max_armijo_it, initial_deformation=None):
 
     LOGGER.info("========= starting gradient descent =========")
 
     functional_data_file = DATA_DIR + 'functional_evolution.csv'
-    # if os.path.isfile(functional_data_file):
-    #     os.remove(functional_data_file)
+
     with open(functional_data_file, 'a') as f:
         f.write("i, fvalue\n")
 
-    opt_steps = 8
-    max_armijo_it = 10
-
     compile_ffd(orig_ffd_box)
-    prev_deformation = [0.0, 0.05, 0.1, 0.14, 0.16, 0.17,
-                        0.175, 0.17, 0.16, 0.14, 0.1, 0.05,
-                        0.0, -0.05, -0.1, -0.14, -0.16, -0.17,
-                        -0.175, -0.17, -0.16, -0.14, -0.1, -0.05]
-
-    # prev_deformation = [0 for i in range(24)]
-    # write_ffd_deformation(prev_deformation, flow_cfg)
-
     shutil.copy('./sample_ffd_deform.cfg',  deformed_ffd_config)
 
-    write_ffd_deformation(prev_deformation, deformed_ffd_config)
-    compile_ffd(deformed_ffd_config)
+    if initial_deformation is None:
+        LOGGER.info("Start on initial square")
+        initial_deformation = [0 for i in range(24)]
+        change_mesh(flow_cfg, orig_flow_mesh)
+    else:
+        LOGGER.info(f"initial deformation={initial_deformation}")
+        write_ffd_deformation(initial_deformation, deformed_ffd_config)
+        compile_ffd(deformed_ffd_config)
+        change_mesh(flow_cfg, deformed_flow_mesh)
 
-    change_mesh(flow_cfg, deformed_flow_mesh)
     solve_state(state_cfg, MPI_n)
-
     J_i = extract_value(state_sol_file, 11)
-
     solve_adj_state(adj_cfg)
 
+    prev_deformation = initial_deformation
     for i in range(1, opt_steps):
 
         LOGGER.info(f"===== Opt iteration {i} =====")
@@ -438,6 +446,28 @@ def gradient_descent():
 
 
 if __name__ == '__main__':
-    central_difference_verification()
-    # gradient_descent()
+    deformation = [0.0, 0.05, 0.1, 0.14, 0.16, 0.17,
+                   0.175, 0.17, 0.16, 0.14, 0.1, 0.05,
+                   0.0, -0.05, -0.1, -0.14, -0.16, -0.17,
+                   -0.175, -0.17, -0.16, -0.14, -0.1, -0.05]
+
+    # central_difference_verification(
+    #     out_filename='central_difference_additional.csv',
+    #     deformation=None
+    # )
+    # central_difference_verification(
+    #     out_filename='central_difference_additional_deformed.csv',
+    #     deformation=deformation
+    # )
+
+    config = {
+        'opt_steps': 3,
+        'max_armijo_it': 8
+    }
+
+    gradient_descent(
+        **config,
+        initial_deformation=None
+    )
+
     LOGGER.info("Finished")

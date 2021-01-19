@@ -5,3 +5,4 @@ data/*
 *.swp
 TurbRhtCht-*
 __pycache__/
+ClusterOutput/
