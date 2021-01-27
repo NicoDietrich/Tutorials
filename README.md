@@ -1,2 +1,1 @@
-# Tutorials
-Collection of tutorials for SU2
+# checkout feature_radiation_multizone
