@@ -5,3 +5,5 @@ I tried to evaluate the perturped functional in parallel but ran into problems I
 Additionally an adapted armijo rule is implemented to test possible applications of the gradients in a more complex setting.
 
 Note that the definition of the ffd box differs is comparison to the upstream repository, as the inclusion of the upper left meshpoint resulted in a broken mesh.
+
+Checkout https://su2code.github.io/tutorials/Turbulent_RHT_CHT/ for a detailed explanation of the SU2 part of the program.
